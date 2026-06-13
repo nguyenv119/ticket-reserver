@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "server",
+  "dolt_database": "ticket_reserver",
+  "project_id": "9f3cfa4a-b9f3-4742-8fe3-1f5889356463"
+}
