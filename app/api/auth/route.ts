@@ -30,17 +30,21 @@ export async function POST(request: Request) {
 
   const { appPassword, sessionSecret } = requireEnv();
 
-  // Timing-safe comparison of the submitted password against APP_PASSWORD.
-  const a = Buffer.from(submitted, "utf8");
-  const b = Buffer.from(appPassword, "utf8");
-  const match =
-    a.length === b.length && timingSafeEqual(a, b);
+  // Timing-safe comparison: sign both the submitted password and the real
+  // APP_PASSWORD with the same key, then compare fixed-length (64-hex) HMAC
+  // digests. This avoids the length-based short-circuit that `a.length ===
+  // b.length && timingSafeEqual(a, b)` would introduce when the submitted
+  // password has a different byte-length than APP_PASSWORD.
+  const submittedDigest = Buffer.from(signCookie(submitted, sessionSecret), "hex");
+  const expectedDigest = Buffer.from(signCookie(appPassword, sessionSecret), "hex");
+  const match = timingSafeEqual(submittedDigest, expectedDigest);
 
   if (!match) {
     return NextResponse.json({ error: "invalid_password" }, { status: 401 });
   }
 
-  // Sign the cookie: HMAC-SHA256(appPassword, sessionSecret) as hex.
+  // The cookie value is the HMAC of APP_PASSWORD — the same digest we already
+  // computed as expectedDigest, expressed as hex.
   const cookieValue = signCookie(appPassword, sessionSecret);
 
   const isProduction = process.env.NODE_ENV === "production";

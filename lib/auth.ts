@@ -23,31 +23,36 @@ export function signCookie(password: string, secret: string): string {
 /**
  * Verify that `cookieValue` is the correct HMAC of APP_PASSWORD.
  *
- * Recomputes the expected HMAC and compares using timingSafeEqual to prevent
- * timing-based attacks. Handles mismatched buffer lengths safely (returns
- * false rather than throwing RangeError).
+ * To prevent two classes of timing oracle:
+ *   1. Length oracle — we must not short-circuit on differing buffer lengths.
+ *   2. Input-length oracle — Buffer.from(cookieValue, "utf8") is
+ *      O(attacker-length), so we must not call it on the raw attacker value
+ *      before the comparison.
+ *
+ * Fix: apply HMAC again to BOTH the attacker-supplied value and the expected
+ * value using the same key, producing two fixed-length (32-byte / 64-hex)
+ * digests, then compare with timingSafeEqual. Because HMAC is collision-
+ * resistant, HMAC(a, k) == HMAC(b, k) iff a == b, so the verification
+ * result is correct. Every code path now calls exactly one timingSafeEqual on
+ * two equal-size (32-byte) buffers regardless of attacker-controlled input.
  */
 export function verifyCookie(cookieValue: string, secret: string): boolean {
   const appPassword = process.env.APP_PASSWORD;
   if (!appPassword) {
     throw new Error("APP_PASSWORD env var is not set");
   }
+
+  // expected is the correct cookie value: HMAC(appPassword, secret).
   const expected = signCookie(appPassword, secret);
 
-  const a = Buffer.from(cookieValue, "utf8");
-  const b = Buffer.from(expected, "utf8");
+  // Re-sign both the attacker-supplied value and the expected value with the
+  // same key. signCookie uses createHmac, which processes strings internally
+  // without exposing an O(len) buffer to timing analysis. Both results are
+  // always 64 hex chars (32 bytes), so timingSafeEqual never throws.
+  const receivedHmac = Buffer.from(signCookie(cookieValue, secret), "hex");
+  const expectedHmac = Buffer.from(signCookie(expected, secret), "hex");
 
-  // timingSafeEqual requires equal-length buffers; pad the shorter one so we
-  // always call it (prevents length-based short-circuit leaks) and still
-  // return false on mismatch.
-  if (a.length !== b.length) {
-    // Compare against expected anyway to consume constant time for the HMAC
-    // path, then return false.
-    timingSafeEqual(b, b); // consume time
-    return false;
-  }
-
-  return timingSafeEqual(a, b);
+  return timingSafeEqual(receivedHmac, expectedHmac);
 }
 
 /**

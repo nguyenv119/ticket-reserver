@@ -129,11 +129,12 @@ describe("POST /api/auth", () => {
     assert.equal(res.status, 400);
   });
 
-  it("sets cookie with samesite attribute", async () => {
+  it("sets cookie with samesite=lax attribute", async () => {
     /**
-     * sameSite prevents CSRF: the cookie is not sent on cross-origin form
-     * submissions. Without this an attacker could trigger seat-hold API
-     * calls by tricking the user into visiting a malicious page.
+     * sameSite=lax (not "none") prevents CSRF: the cookie is not sent on
+     * cross-origin form submissions. "none" would disable this protection.
+     * Without this an attacker could trigger seat-hold API calls by tricking
+     * the user into visiting a malicious page.
      */
     // GIVEN
     const req = makeRequest({ password: CORRECT_PASSWORD });
@@ -143,6 +144,6 @@ describe("POST /api/auth", () => {
 
     // THEN
     const setCookie = (res.headers.get("set-cookie") ?? "").toLowerCase();
-    assert.ok(setCookie.includes("samesite"), "cookie must have samesite");
+    assert.ok(setCookie.includes("samesite=lax"), "cookie must have samesite=lax");
   });
 });

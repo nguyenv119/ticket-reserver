@@ -216,4 +216,25 @@ describe("proxy — misconfiguration", () => {
     const location = res.headers.get("location") ?? "";
     assert.ok(location.includes("/login"), "missing SESSION_SECRET must redirect to /login");
   });
+
+  it("redirects to /login when APP_PASSWORD is missing, even with a valid-looking cookie", () => {
+    /**
+     * Missing APP_PASSWORD must fail closed — verifyCookie throws when
+     * APP_PASSWORD is unset, and the proxy's catch block must redirect to
+     * /login rather than granting access. Without this, a misconfigured
+     * deployment with no APP_PASSWORD set would grant access to any request
+     * that carries a cookie (or even no cookie at all).
+     */
+    // GIVEN
+    const validLookingCookie = signCookie(TEST_PASSWORD, TEST_SECRET);
+    delete process.env.APP_PASSWORD;
+    const req = makeRequest("/", cookieHeader(COOKIE_NAME, validLookingCookie));
+
+    // WHEN
+    const res = proxyFn(req) as Response;
+
+    // THEN
+    const location = res.headers.get("location") ?? "";
+    assert.ok(location.includes("/login"), "missing APP_PASSWORD must redirect to /login");
+  });
 });
