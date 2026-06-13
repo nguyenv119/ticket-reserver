@@ -43,3 +43,6 @@ next-env.d.ts
 # Dolt database files (added by bd init)
 .dolt/
 *.db
+
+# claude code local
+.claude/scheduled_tasks.lock
