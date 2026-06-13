@@ -1,15 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-
-type Job = {
-  id: string;
-  venue_url: string;
-  seats: string;
-  status: "holding" | "released" | "error";
-  message: string | null;
-  last_held_at: string | null;
-};
+import type { Job } from "@/lib/types";
 
 export default function Control() {
   const [venueUrl, setVenueUrl] = useState("");
