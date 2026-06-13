@@ -25,8 +25,8 @@ import type { HoldState, Job, HeartbeatBody } from "../types";
 // Compile-time exhaustiveness check: if HoldState gains a new variant that is
 // NOT in the return union, tsc errors here — catching it before downstream
 // switch statements miss a case.
-const _holdStateExhaustive = (s: HoldState): "holding" | "confirmed" | "lost" | "released" => s;
-void _holdStateExhaustive; // consumed below alongside other type vars
+const _agentSwitchCoversAllHoldStates = (s: HoldState): "holding" | "confirmed" | "lost" | "released" => s;
+void _agentSwitchCoversAllHoldStates; // consumed below alongside other type vars
 
 // All four variants must be assignable to HoldState.
 const _h1: HoldState = "holding";
@@ -100,7 +100,7 @@ _requiresHoldFields(_job); // full Job must satisfy the subset
 
 // Suppress "unused variable" warnings (these vars ARE the test — their
 // assignment is the assertion; usage here silences the linter).
-void _holdStateExhaustive;
+void _agentSwitchCoversAllHoldStates;
 void _h1; void _h2; void _h3; void _h4;
 void _status; void _status2; void _status3;
 void _source1; void _source2;
