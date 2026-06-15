@@ -54,21 +54,37 @@ export function formatRelativeTime(ts: string | null, now: Date = new Date()): s
 /**
  * Returns true when a job's heartbeat is stale (agent missed a cron tick).
  *
- * A null timestamp means the agent has never run — that is NOT stale (the job
- * may be brand new). Treat null as "not yet stale" and let the UI display
- * "no heartbeat yet" via formatRelativeTime instead.
+ * Three cases:
+ *   1. ts non-null  → stale iff (now - ts) > STALE_THRESHOLD_MS.
+ *   2. ts null + createdAt non-null → stale iff (now - createdAt) > STALE_THRESHOLD_MS.
+ *      A job that has existed longer than the threshold with no heartbeat at all
+ *      means the agent never started — seats are at risk just as if the agent
+ *      died after starting.
+ *   3. ts null + createdAt null → false (truly brand-new / unknown; no warning).
  *
- * The boundary is strictly greater-than: a heartbeat exactly at T=6 min is not
- * stale (one tick barely made it). This prevents flickering warnings at the
- * normal 5-min cron cycle boundary.
+ * Note: formatRelativeTime(null) still returns "no heartbeat yet" regardless of
+ * staleness — the warning BANNER and the relative-time LABEL are separate
+ * concerns and can both be shown simultaneously.
  *
- * @param ts   - last_heartbeat_at from the job row, or null.
- * @param now  - Reference instant. Inject in tests; defaults to new Date().
+ * The boundary is strictly greater-than: a heartbeat (or creation) exactly at
+ * T=6 min is NOT stale. This prevents flickering warnings at the normal 5-min
+ * cron cycle boundary.
+ *
+ * @param ts        - last_heartbeat_at from the job row, or null.
+ * @param now       - Reference instant. Inject in tests; defaults to new Date().
+ * @param createdAt - created_at from the job row, or null. Used as fallback
+ *                    reference when ts is null so a never-started agent triggers
+ *                    the stale warning after the threshold elapses.
  *
  * What breaks: if the boundary were >= rather than >, normal-cadence heartbeats
  * at exactly 5-6 min would produce spurious stale warnings.
  */
-export function isHeartbeatStale(ts: string | null, now: Date = new Date()): boolean {
-  if (ts === null) return false;
-  return now.getTime() - new Date(ts).getTime() > STALE_THRESHOLD_MS;
+export function isHeartbeatStale(
+  ts: string | null,
+  now: Date = new Date(),
+  createdAt: string | null = null,
+): boolean {
+  const reference = ts ?? createdAt;
+  if (reference === null) return false;
+  return now.getTime() - new Date(reference).getTime() > STALE_THRESHOLD_MS;
 }

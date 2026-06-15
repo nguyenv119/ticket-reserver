@@ -17,7 +17,11 @@ import { describe, it, before } from "node:test";
 import assert from "node:assert/strict";
 
 let formatRelativeTime: (ts: string | null, now?: Date) => string;
-let isHeartbeatStale: (ts: string | null, now?: Date) => boolean;
+let isHeartbeatStale: (
+  ts: string | null,
+  now?: Date,
+  createdAt?: string | null,
+) => boolean;
 let STALE_THRESHOLD_MS: number;
 
 before(async () => {
@@ -170,22 +174,62 @@ describe("isHeartbeatStale", () => {
     assert.equal(result, false);
   });
 
-  it("returns false for a null timestamp (never heartbeated)", () => {
+  it("returns false for a null ts AND null createdAt (truly brand-new / unknown)", () => {
     /**
-     * A job that has never heartbeated is not stale — it may have been just
-     * created and the agent hasn't run yet. Marking it stale would produce a
-     * warning on every brand-new job, making the warning meaningless.
-     * A null heartbeat is a different condition from a stale one and deserves
-     * its own display treatment in the UI.
+     * When both ts and createdAt are null there is no reference point to measure
+     * staleness against. Returning true here would fire a warning on every job
+     * whose creation time is somehow missing — that would be misleading and
+     * erode operator trust in the stale banner.
      */
     // GIVEN
     const now = new Date("2025-01-01T00:10:00Z");
 
     // WHEN
-    const result = isHeartbeatStale(null, now);
+    const result = isHeartbeatStale(null, now, null);
 
     // THEN
     assert.equal(result, false);
+  });
+
+  it("returns false for null ts when createdAt is within the threshold (fresh never-heartbeated job)", () => {
+    /**
+     * A job created 3 minutes ago has never heartbeated, but the agent may not
+     * have run its first tick yet — 3 min < STALE_THRESHOLD_MS (6 min) so we
+     * must NOT warn. Returning true here would fire a red warning on every
+     * freshly submitted job before the first cron tick, making the warning noisy
+     * and untrustworthy.
+     */
+    // GIVEN
+    const now = new Date("2025-01-01T00:10:00Z");
+    const createdAt = new Date(now.getTime() - 3 * 60_000).toISOString(); // 3 min ago (< threshold)
+
+    // WHEN
+    const result = isHeartbeatStale(null, now, createdAt);
+
+    // THEN
+    assert.equal(result, false);
+  });
+
+  it("returns true for null ts when createdAt is past the threshold (old never-heartbeated job)", () => {
+    /**
+     * A job created 30 minutes ago that has NEVER heartbeated is exactly the
+     * failure mode the stale warning exists to catch: the cron/agent crashed
+     * before writing its first heartbeat, so seats may expire unrenewed.
+     * Without this branch the red banner would never fire for such a job, giving
+     * the operator a false sense that everything is fine.
+     *
+     * Note: formatRelativeTime(null) still returns "no heartbeat yet" — the
+     * warning BANNER and the time LABEL are independent; both can appear together.
+     */
+    // GIVEN
+    const now = new Date("2025-01-01T00:40:00Z");
+    const createdAt = new Date(now.getTime() - 30 * 60_000).toISOString(); // 30 min ago (> threshold)
+
+    // WHEN
+    const result = isHeartbeatStale(null, now, createdAt);
+
+    // THEN
+    assert.equal(result, true);
   });
 
   it("returns false at exactly the staleness threshold boundary (= 6 min)", () => {

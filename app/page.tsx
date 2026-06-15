@@ -108,7 +108,7 @@ export default function Control() {
         )}
         <ul className="mt-3 space-y-3">
           {active.map((j) => {
-            const stale = isHeartbeatStale(j.last_heartbeat_at, now);
+            const stale = isHeartbeatStale(j.last_heartbeat_at, now, j.created_at);
             const heartbeatLabel = formatRelativeTime(j.last_heartbeat_at, now);
             const neverHeartbeated = j.last_heartbeat_at === null;
 
