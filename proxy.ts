@@ -11,7 +11,7 @@
  */
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { COOKIE_NAME, requireEnv, verifyCookie } from "@/lib/auth";
+import { COOKIE_NAME, requireEnv, verifyCookie, verifyAgentToken } from "@/lib/auth";
 
 /**
  * Paths that never require authentication.
@@ -31,12 +31,50 @@ function isPublic(pathname: string): boolean {
   );
 }
 
+/**
+ * Paths that the external rebook agent is allowed to reach via bearer token.
+ *
+ * Scoped narrowly to the two endpoints the agent actually needs:
+ *   - GET /api/jobs — lists jobs so the agent can discover which need re-holding
+ *   - POST /api/jobs/:id/heartbeat — updates hold_state / last_heartbeat_at
+ *
+ * All other routes (including /, /api/auth, and any future endpoints) are
+ * NOT covered by this predicate and continue to require a human session cookie.
+ * Bearer tokens must NOT grant access to the full site — a leaked AGENT_TOKEN
+ * should expose only these two endpoints, not the admin UI.
+ */
+function isAgentPath(pathname: string): boolean {
+  return (
+    pathname === "/api/jobs" ||
+    pathname.startsWith("/api/jobs/")
+  );
+}
+
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // Always allow public routes through.
   if (isPublic(pathname)) {
     return NextResponse.next();
+  }
+
+  // Agent bearer-token bypass — checked BEFORE the cookie path so the agent
+  // can call its endpoints without a browser session.
+  //
+  // Requirements:
+  //   1. Path must be an agent endpoint (isAgentPath) — not the whole site.
+  //   2. AGENT_TOKEN must be set in the environment (verifyAgentToken fails
+  //      closed when it is unset/empty).
+  //   3. The Authorization header must contain the correct "Bearer <token>".
+  //
+  // If all three hold, pass through immediately. Otherwise fall through to the
+  // human cookie check below — this preserves the redirect behavior for wrong
+  // or absent tokens on agent paths, and handles non-agent paths unchanged.
+  if (isAgentPath(pathname)) {
+    const authHeader = request.headers.get("authorization");
+    if (verifyAgentToken(authHeader)) {
+      return NextResponse.next();
+    }
   }
 
   let sessionSecret: string;
