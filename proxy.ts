@@ -38,15 +38,22 @@ function isPublic(pathname: string): boolean {
  *   - GET /api/jobs — lists jobs so the agent can discover which need re-holding
  *   - POST /api/jobs/:id/heartbeat — updates hold_state / last_heartbeat_at
  *
- * All other routes (including /, /api/auth, and any future endpoints) are
- * NOT covered by this predicate and continue to require a human session cookie.
- * Bearer tokens must NOT grant access to the full site — a leaked AGENT_TOKEN
- * should expose only these two endpoints, not the admin UI.
+ * All other routes (including /, /api/auth, /api/jobs/:id/release, and any
+ * future endpoints) are NOT covered by this predicate and continue to require
+ * a human session cookie. Bearer tokens must NOT grant access to the full site
+ * — a leaked AGENT_TOKEN should expose only these two endpoints, not the admin
+ * UI, and must NOT reach destructive operations such as releasing a job.
+ *
+ * NOTE: This proxy matches by path only, not by HTTP method. `=== "/api/jobs"`
+ * therefore also allows a bearer POST to /api/jobs (job creation). That is
+ * acceptable and intentional — creating a job requires a valid request body and
+ * is not destructive. What matters is that /api/jobs/:id/release is explicitly
+ * excluded by using an exact heartbeat regex rather than a broad prefix match.
  */
 function isAgentPath(pathname: string): boolean {
   return (
-    pathname === "/api/jobs" ||
-    pathname.startsWith("/api/jobs/")
+    pathname === "/api/jobs" ||                         // GET list (agent discovers jobs to re-hold)
+    /^\/api\/jobs\/[^/]+\/heartbeat$/.test(pathname)   // POST heartbeat only
   );
 }
 

@@ -362,31 +362,64 @@ describe("proxy — agent bearer token on heartbeat path", () => {
     );
   });
 
-  it("does NOT allow bearer token access to /api/auth with a valid token", () => {
+  it("does NOT allow bearer token access to prefix-adjacent paths like /api/jobs-export", () => {
     /**
-     * Verifies that the bearer bypass does not extend to /api/auth, which is
-     * already public but must remain a separate code path.
+     * Regression guard for isAgentPath scope: a loose prefix match such as
+     * `pathname.startsWith("/api/jobs/")` or `pathname.startsWith("/api/jobs")`
+     * would accidentally grant bearer access to paths like /api/jobs-export or
+     * /api/jobstatus that happen to share a common prefix with the agent surface.
      *
-     * /api/auth is handled by isPublic(), not by the agent bypass. This test
-     * confirms the two paths don't accidentally overlap in the wrong direction
-     * (bearer granting access to auth endpoints it shouldn't govern).
+     * /api/jobs-export is neither a public route nor a real agent path. With the
+     * correctly narrowed isAgentPath (exact `=== "/api/jobs"` plus a heartbeat
+     * regex), a valid bearer token sent to this path must fall through to the
+     * cookie check and redirect to /login.
      *
-     * If the bearer scope accidentally included /api/auth, the logic would be
-     * confused — the route is public already, but for the wrong reason.
-     * More importantly, it signals a scope regression if isAgentPath ever
-     * inadvertently matches /api/auth* routes.
+     * If this breaks, isAgentPath has regressed to a broad prefix match and any
+     * future /api/jobs-* route is silently exposed to bearer-token callers.
      */
-    // GIVEN — /api/auth is public; bearer token present but irrelevant
-    const req = makeRequest("/api/auth", undefined, bearerHeader(TEST_AGENT_TOKEN));
+    // GIVEN — valid bearer token on a prefix-adjacent but non-agent path
+    const req = makeRequest("/api/jobs-export", undefined, bearerHeader(TEST_AGENT_TOKEN));
 
     // WHEN
     const res = proxyFn(req) as Response;
 
-    // THEN — /api/auth passes through because it's public (not because of bearer)
-    // The key assertion: no redirect (the route is reachable)
+    // THEN — bearer must NOT bypass the cookie guard for /api/jobs-export
+    const location = res.headers.get("location") ?? "";
     assert.ok(
-      !res.headers.get("location"),
-      "/api/auth with bearer must still pass through (it is public)",
+      location.includes("/login"),
+      "valid bearer on /api/jobs-export must still redirect to /login (scope regression guard)",
+    );
+  });
+
+  it("does NOT allow bearer token access to /api/jobs/:id/release (destructive operation)", () => {
+    /**
+     * Locks in Finding 1 from the security review: the bearer token must NOT
+     * grant access to /api/jobs/:id/release, a destructive endpoint that flips
+     * a job's status to 'released'.
+     *
+     * The original isAgentPath used `pathname.startsWith("/api/jobs/")`, which
+     * matched /api/jobs/:id/release. The fix narrows the match to exactly
+     * /api/jobs/:id/heartbeat via regex, explicitly excluding /release.
+     *
+     * If this breaks, a leaked AGENT_TOKEN can release any job by ID without
+     * a human session cookie — a privilege escalation beyond the agent's
+     * documented scope (heartbeat + list only).
+     */
+    // GIVEN — valid bearer token on the destructive release endpoint
+    const req = makeRequest(
+      "/api/jobs/job-abc-123/release",
+      undefined,
+      bearerHeader(TEST_AGENT_TOKEN),
+    );
+
+    // WHEN
+    const res = proxyFn(req) as Response;
+
+    // THEN — bearer must NOT unlock the release endpoint
+    const location = res.headers.get("location") ?? "";
+    assert.ok(
+      location.includes("/login"),
+      "valid bearer on /api/jobs/:id/release must redirect to /login (destructive op excluded)",
     );
   });
 
