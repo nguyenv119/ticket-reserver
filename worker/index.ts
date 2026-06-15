@@ -16,6 +16,7 @@ async function tick() {
       await sql`
         update jobs
         set last_held_at = now(),
+            source = 'mock',
             message = ${"holding " + job.seats + " — refreshed"}
         where id = ${job.id}`;
     } catch (e) {

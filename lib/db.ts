@@ -42,6 +42,41 @@ export function ensureSchema(): Promise<void> {
           holder text,
           hold_expires_at timestamptz
         )`;
+
+      // ── Agent contract columns (added idempotently for existing DBs) ────────
+      // hold_state  = AGENT-OBSERVED REALITY (holding|confirmed|lost|released)
+      // source      = WRITER FENCE (agent|mock)
+      await sql`alter table jobs add column if not exists hold_state text not null default 'holding'`;
+      await sql`alter table jobs add column if not exists last_heartbeat_at timestamptz`;
+      await sql`alter table jobs add column if not exists agent_note text`;
+      await sql`alter table jobs add column if not exists source text not null default 'agent'`;
+
+      // CHECK constraints cannot use IF NOT EXISTS — guard by checking
+      // pg_constraint so re-running ensureSchema() is still idempotent.
+      // UNTESTED: runtime path — no test framework is installed; this is
+      // verified by manual smoke only. The ::regclass is schema-qualified to
+      // avoid search_path ambiguity on Neon's stateless HTTP driver.
+      const hsRows = await sql`
+        select count(*)::text as count from pg_constraint
+        where conrelid = 'public.jobs'::regclass
+          and conname = 'jobs_hold_state_check'` as { count: string }[];
+      if (hsRows[0].count === "0") {
+        await sql`
+          alter table jobs
+          add constraint jobs_hold_state_check
+          check (hold_state in ('holding','confirmed','lost','released'))`;
+      }
+
+      const srcRows = await sql`
+        select count(*)::text as count from pg_constraint
+        where conrelid = 'public.jobs'::regclass
+          and conname = 'jobs_source_check'` as { count: string }[];
+      if (srcRows[0].count === "0") {
+        await sql`
+          alter table jobs
+          add constraint jobs_source_check
+          check (source in ('agent','mock'))`;
+      }
     })();
   }
   return schemaReady;

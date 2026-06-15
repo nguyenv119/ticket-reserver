@@ -1,14 +1,14 @@
 import { sql, VENUE_HOLD_TTL_SECONDS } from "./db";
+import type { Job } from "./types";
 
 // The ONE pluggable piece. Today: a mock engine that re-holds seats in our own
 // `venue_seats` table. To make this work on a real ticketing site, swap the
 // body of hold()/release() for a Playwright + Claude Agent SDK driver that
 // logs in, finds the seats, and clicks "hold" — same signatures, same worker.
-export interface HoldJob {
-  id: string;
-  venue_url: string;
-  seats: string; // comma separated
-}
+
+// HoldJob is the subset of Job columns the engine needs. Using Pick<Job, ...>
+// instead of a separate interface ensures the two types never silently diverge.
+export type HoldJob = Pick<Job, "id" | "venue_url" | "seats">;
 
 function seatList(job: HoldJob): string[] {
   return job.seats
