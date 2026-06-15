@@ -17,6 +17,7 @@ let COOKIE_NAME: string;
 
 const TEST_PASSWORD = "demo-magic-2026";
 const TEST_SECRET = "test-session-secret";
+const TEST_AGENT_TOKEN = "test-agent-token-abc123-long-enough-to-be-safe";
 
 before(async () => {
   const proxyMod = await import("../proxy.js");
@@ -31,21 +32,31 @@ const origEnv = { ...process.env };
 beforeEach(() => {
   process.env.APP_PASSWORD = TEST_PASSWORD;
   process.env.SESSION_SECRET = TEST_SECRET;
+  process.env.AGENT_TOKEN = TEST_AGENT_TOKEN;
 });
 afterEach(() => {
   process.env.APP_PASSWORD = origEnv.APP_PASSWORD;
   process.env.SESSION_SECRET = origEnv.SESSION_SECRET;
+  process.env.AGENT_TOKEN = origEnv.AGENT_TOKEN;
 });
 
-function makeRequest(path: string, cookieHeader?: string): NextRequest {
+function makeRequest(
+  path: string,
+  cookieHeader?: string,
+  extraHeaders?: Record<string, string>,
+): NextRequest {
   const url = `http://localhost${path}`;
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = { ...extraHeaders };
   if (cookieHeader) headers["cookie"] = cookieHeader;
   return new NextRequest(url, { headers });
 }
 
 function cookieHeader(name: string, value: string): string {
   return `${name}=${value}`;
+}
+
+function bearerHeader(token: string): Record<string, string> {
+  return { authorization: `Bearer ${token}` };
 }
 
 describe("proxy — public route allowlist", () => {
@@ -236,5 +247,210 @@ describe("proxy — misconfiguration", () => {
     // THEN
     const location = res.headers.get("location") ?? "";
     assert.ok(location.includes("/login"), "missing APP_PASSWORD must redirect to /login");
+  });
+});
+
+describe("proxy — agent bearer token on heartbeat path", () => {
+  it("passes POST /api/jobs/:id/heartbeat through with a valid bearer token and no cookie", () => {
+    /**
+     * Verifies that the Claude-in-Chrome agent can reach the heartbeat endpoint
+     * using only an Authorization: Bearer header, without a human browser cookie.
+     *
+     * The agent runs headlessly and cannot obtain a session cookie. Without this
+     * bypass, heartbeat calls would be redirected to /login and the agent would
+     * fail to update job hold-state.
+     *
+     * If this contract breaks, the rebook agent stops heartbeating, hold_state
+     * goes stale, and users see incorrect job status in the dashboard.
+     */
+    // GIVEN — valid agent token, no session cookie
+    const req = makeRequest(
+      "/api/jobs/job-abc-123/heartbeat",
+      undefined,
+      bearerHeader(TEST_AGENT_TOKEN),
+    );
+
+    // WHEN
+    const res = proxyFn(req) as Response;
+
+    // THEN — must pass through, not redirect
+    assert.ok(
+      !res.headers.get("location"),
+      "valid bearer on /api/jobs/:id/heartbeat must not redirect",
+    );
+  });
+
+  it("passes GET /api/jobs through with a valid bearer token and no cookie", () => {
+    /**
+     * Verifies that the agent can list jobs to discover which need to be
+     * re-held, using only the bearer token.
+     *
+     * GET /api/jobs is the discovery surface the agent uses to find jobs in
+     * 'holding' state. Blocking it would prevent the agent from knowing which
+     * jobs to act on.
+     *
+     * If this breaks, the agent cannot enumerate jobs and will fail silently
+     * without triggering any heartbeats.
+     */
+    // GIVEN — valid agent token, no session cookie
+    const req = makeRequest("/api/jobs", undefined, bearerHeader(TEST_AGENT_TOKEN));
+
+    // WHEN
+    const res = proxyFn(req) as Response;
+
+    // THEN
+    assert.ok(
+      !res.headers.get("location"),
+      "valid bearer on /api/jobs must not redirect",
+    );
+  });
+
+  it("redirects /api/jobs/:id/heartbeat when the bearer token is wrong", () => {
+    /**
+     * Verifies that an incorrect bearer token does not grant access — the
+     * proxy falls through to the human cookie check and redirects to login
+     * when no cookie is present.
+     *
+     * Without this check, any caller who knows the URL pattern but not the
+     * token would gain access to the agent surface.
+     *
+     * If this breaks, attackers with a wrong/guessed token can reach the
+     * heartbeat endpoint without authentication.
+     */
+    // GIVEN — wrong bearer token, no session cookie
+    const req = makeRequest(
+      "/api/jobs/job-abc-123/heartbeat",
+      undefined,
+      bearerHeader("wrong-token-that-is-not-valid"),
+    );
+
+    // WHEN
+    const res = proxyFn(req) as Response;
+
+    // THEN — wrong token must fall through to cookie check → redirect
+    const location = res.headers.get("location") ?? "";
+    assert.ok(
+      location.includes("/login"),
+      "wrong bearer on /api/jobs/:id/heartbeat must redirect to /login",
+    );
+  });
+
+  it("does NOT allow bearer token access to non-agent routes like /", () => {
+    /**
+     * Verifies that the bearer bypass is narrowly scoped to agent endpoints
+     * only. A valid bearer token must NOT grant access to the root page or
+     * any non-agent route.
+     *
+     * The agent only needs /api/jobs and /api/jobs/:id/heartbeat. Allowing
+     * bearer on / would give the agent (or a leaked token) access to the
+     * entire human-facing UI, which is broader than necessary.
+     *
+     * If this breaks, a leaked AGENT_TOKEN becomes equivalent to full site
+     * access, violating the principle of least privilege.
+     */
+    // GIVEN — valid agent token on a non-agent path, no session cookie
+    const req = makeRequest("/", undefined, bearerHeader(TEST_AGENT_TOKEN));
+
+    // WHEN
+    const res = proxyFn(req) as Response;
+
+    // THEN — bearer must not unlock /
+    const location = res.headers.get("location") ?? "";
+    assert.ok(
+      location.includes("/login"),
+      "valid bearer on / must still redirect to /login",
+    );
+  });
+
+  it("does NOT allow bearer token access to prefix-adjacent paths like /api/jobs-export", () => {
+    /**
+     * Regression guard for isAgentPath scope: a loose prefix match such as
+     * `pathname.startsWith("/api/jobs/")` or `pathname.startsWith("/api/jobs")`
+     * would accidentally grant bearer access to paths like /api/jobs-export or
+     * /api/jobstatus that happen to share a common prefix with the agent surface.
+     *
+     * /api/jobs-export is neither a public route nor a real agent path. With the
+     * correctly narrowed isAgentPath (exact `=== "/api/jobs"` plus a heartbeat
+     * regex), a valid bearer token sent to this path must fall through to the
+     * cookie check and redirect to /login.
+     *
+     * If this breaks, isAgentPath has regressed to a broad prefix match and any
+     * future /api/jobs-* route is silently exposed to bearer-token callers.
+     */
+    // GIVEN — valid bearer token on a prefix-adjacent but non-agent path
+    const req = makeRequest("/api/jobs-export", undefined, bearerHeader(TEST_AGENT_TOKEN));
+
+    // WHEN
+    const res = proxyFn(req) as Response;
+
+    // THEN — bearer must NOT bypass the cookie guard for /api/jobs-export
+    const location = res.headers.get("location") ?? "";
+    assert.ok(
+      location.includes("/login"),
+      "valid bearer on /api/jobs-export must still redirect to /login (scope regression guard)",
+    );
+  });
+
+  it("does NOT allow bearer token access to /api/jobs/:id/release (destructive operation)", () => {
+    /**
+     * Locks in Finding 1 from the security review: the bearer token must NOT
+     * grant access to /api/jobs/:id/release, a destructive endpoint that flips
+     * a job's status to 'released'.
+     *
+     * The original isAgentPath used `pathname.startsWith("/api/jobs/")`, which
+     * matched /api/jobs/:id/release. The fix narrows the match to exactly
+     * /api/jobs/:id/heartbeat via regex, explicitly excluding /release.
+     *
+     * If this breaks, a leaked AGENT_TOKEN can release any job by ID without
+     * a human session cookie — a privilege escalation beyond the agent's
+     * documented scope (heartbeat + list only).
+     */
+    // GIVEN — valid bearer token on the destructive release endpoint
+    const req = makeRequest(
+      "/api/jobs/job-abc-123/release",
+      undefined,
+      bearerHeader(TEST_AGENT_TOKEN),
+    );
+
+    // WHEN
+    const res = proxyFn(req) as Response;
+
+    // THEN — bearer must NOT unlock the release endpoint
+    const location = res.headers.get("location") ?? "";
+    assert.ok(
+      location.includes("/login"),
+      "valid bearer on /api/jobs/:id/release must redirect to /login (destructive op excluded)",
+    );
+  });
+
+  it("does NOT authenticate when AGENT_TOKEN is unset (fail closed)", () => {
+    /**
+     * Verifies that the bearer bypass is inert when AGENT_TOKEN is not
+     * configured. An empty or missing AGENT_TOKEN must never match any
+     * bearer value, including an empty string.
+     *
+     * This prevents an accidental open door if the env var is omitted from
+     * a deployment — the site remains human-password-protected.
+     *
+     * If this breaks, a misconfigured deployment with no AGENT_TOKEN would
+     * allow any request bearing 'Authorization: Bearer ' to reach agent routes.
+     */
+    // GIVEN — AGENT_TOKEN removed from env; bearer header still sent
+    delete process.env.AGENT_TOKEN;
+    const req = makeRequest(
+      "/api/jobs/job-abc-123/heartbeat",
+      undefined,
+      bearerHeader(TEST_AGENT_TOKEN),
+    );
+
+    // WHEN
+    const res = proxyFn(req) as Response;
+
+    // THEN — must redirect; bearer path inactive when AGENT_TOKEN unset
+    const location = res.headers.get("location") ?? "";
+    assert.ok(
+      location.includes("/login"),
+      "unset AGENT_TOKEN must cause bearer path to redirect to /login",
+    );
   });
 });

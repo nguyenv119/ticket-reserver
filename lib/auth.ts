@@ -67,3 +67,43 @@ export function requireEnv(): { appPassword: string; sessionSecret: string } {
   if (!sessionSecret) throw new Error("SESSION_SECRET env var is not set");
   return { appPassword, sessionSecret };
 }
+
+/**
+ * Verify the Authorization header value against the AGENT_TOKEN env var.
+ *
+ * The `authorizationHeader` argument is the raw value of the
+ * `Authorization` HTTP header (e.g. "Bearer abc123"), or null/undefined if
+ * the header was absent. The function extracts the token after "Bearer ",
+ * then performs a timing-safe comparison against AGENT_TOKEN.
+ *
+ * Timing-safe design — same double-HMAC technique as verifyCookie:
+ *   Apply HMAC(value, AGENT_TOKEN) and HMAC(AGENT_TOKEN, AGENT_TOKEN) and
+ *   compare the two fixed-length (64-hex) digests with timingSafeEqual.
+ *   Because the key is the same on both sides (AGENT_TOKEN), collisions are
+ *   collision-resistant under SHA-256, so the result is correct:
+ *   HMAC(supplied, k) == HMAC(k, k) iff supplied == k.
+ *   Both buffers are always 32 bytes, so timingSafeEqual never throws.
+ *
+ * Fail-closed rules:
+ *   - Returns false (never authenticates) if AGENT_TOKEN is unset or empty.
+ *   - Returns false if the header is absent, empty, or lacks the "Bearer " prefix.
+ *   - Returns false if the supplied token does not match AGENT_TOKEN.
+ */
+export function verifyAgentToken(authorizationHeader: string | null | undefined): boolean {
+  // Fail closed: AGENT_TOKEN must be non-empty in the environment.
+  const agentToken = process.env.AGENT_TOKEN;
+  if (!agentToken) return false;
+
+  // Extract the bearer value from "Bearer <token>".
+  const prefix = "Bearer ";
+  if (!authorizationHeader || !authorizationHeader.startsWith(prefix)) return false;
+  const supplied = authorizationHeader.slice(prefix.length);
+  if (!supplied) return false;
+
+  // Double-HMAC: key is AGENT_TOKEN for both sides.
+  // Both outputs are always 64 hex chars (32 bytes) — timingSafeEqual is safe.
+  const suppliedHmac = Buffer.from(createHmac("sha256", agentToken).update(supplied).digest("hex"), "hex");
+  const expectedHmac = Buffer.from(createHmac("sha256", agentToken).update(agentToken).digest("hex"), "hex");
+
+  return timingSafeEqual(suppliedHmac, expectedHmac);
+}
