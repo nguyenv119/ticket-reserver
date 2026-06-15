@@ -8,8 +8,21 @@
  *                              real agent only writes source='agent'
  */
 
+/**
+ * Single source of truth for valid hold_state values.
+ * lib/heartbeat-validation.ts imports this constant so the runtime list and
+ * the TypeScript type can never drift — adding a new variant here automatically
+ * widens both the type and the validation allowlist.
+ */
+export const HOLD_STATES = [
+  "holding",
+  "confirmed",
+  "lost",
+  "released",
+] as const;
+
 /** The four states the external re-booker agent can report about a hold. */
-export type HoldState = "holding" | "confirmed" | "lost" | "released";
+export type HoldState = (typeof HOLD_STATES)[number];
 
 /** All columns in the `jobs` table. */
 export type Job = {

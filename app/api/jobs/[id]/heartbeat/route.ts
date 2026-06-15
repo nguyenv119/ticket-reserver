@@ -29,11 +29,21 @@ export async function POST(
 
   const { hold_state, agent_note } = validation.body;
 
+  // agent_note semantics (PATCH-style preserve):
+  //   - key absent in body → agent_note is undefined here → preserve existing DB value
+  //     (set column to itself, i.e. no-op)
+  //   - key present (any string, including "") → overwrite with the new value
+  // This lets the agent clear a note by sending agent_note:"" while a bare
+  // status ping ({hold_state:"confirmed"}) never erases a previously stored note.
+  // When agent_note key was absent the validator returns undefined; we preserve
+  // the existing DB value by setting the column to itself (a no-op).
+  const noteExpr =
+    agent_note !== undefined ? agent_note : sql.unsafe("agent_note");
   const rows = await sql`
     update jobs
     set hold_state = ${hold_state},
         last_heartbeat_at = now(),
-        agent_note = ${agent_note ?? null}
+        agent_note = ${noteExpr}
     where id = ${id}
     returning *`;
 

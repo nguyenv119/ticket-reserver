@@ -100,10 +100,8 @@ describe("validateHeartbeatBody", () => {
      * is accidentally excluded from HOLD_STATES, the agent will receive a 400
      * when reporting that specific state and the UI will never see it.
      */
-    // GIVEN
-    const validStates = ["holding", "confirmed", "lost", "released"];
-
-    for (const state of validStates) {
+    // GIVEN — iterate the canonical HOLD_STATES so new variants are auto-exercised
+    for (const state of HOLD_STATES) {
       // WHEN
       const result = validateHeartbeatBody({ hold_state: state });
 

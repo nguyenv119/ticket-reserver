@@ -4,20 +4,12 @@
  * Extracted here so they can be tested without importing lib/db.ts (which
  * requires DATABASE_URL at import time and calls out to Neon).
  */
+import { HOLD_STATES } from "@/lib/types";
 import type { HoldState, HeartbeatBody } from "@/lib/types";
 
-/**
- * Runtime list of valid hold_state values. Kept in sync with the HoldState
- * union type — both live in this file / lib/types.ts so any divergence is
- * immediately visible. The DB CHECK constraint (jobs_hold_state_check) is
- * a third layer of defense at the persistence layer.
- */
-export const HOLD_STATES: readonly HoldState[] = [
-  "holding",
-  "confirmed",
-  "lost",
-  "released",
-];
+// Re-export so callers that import from this module don't need to change.
+// The canonical declaration lives in lib/types.ts (single source of truth).
+export { HOLD_STATES };
 
 export type ValidationResult =
   | { ok: true; body: HeartbeatBody }
